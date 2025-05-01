@@ -20,6 +20,7 @@ class Model_MLP(Layer):
                     raise NotImplementedError
                 elif act_func == 'ReLU':
                     layer_f = ReLU()
+                #     self.layers.append(Dropout(drop_prob=0.5))
                 self.layers.append(layer)
                 if i < len(size_list) - 2:
                     self.layers.append(layer_f)
@@ -35,10 +36,15 @@ class Model_MLP(Layer):
         return outputs
 
     def backward(self, loss_grad):
+        for layer in self.layers:
+            if layer.optimizable:
+                layer.clear_grad()
+
         grads = loss_grad
         for layer in reversed(self.layers):
             grads = layer.backward(grads)
         return grads
+
 
     def load_model(self, param_list):
         with open(param_list, 'rb') as f:
@@ -72,26 +78,61 @@ class Model_MLP(Layer):
         
         with open(save_path, 'wb') as f:
             pickle.dump(param_list, f)
-        
 
 class Model_CNN(Layer):
     """
     A model with conv2D layers. Implement it using the operators you have written in op.py
     """
+
     def __init__(self):
-        pass
+        self.layers = [
+            conv2D(in_channels=1, out_channels=2, kernel_size=5),
+            ReLU(),
+            MaxPool2x2(),
+            Flatten(),
+            Linear(2 * 12 * 12, 32),
+            ReLU(),
+            Linear(32, 10)
+        ]
 
     def __call__(self, X):
         return self.forward(X)
 
     def forward(self, X):
-        pass
+        outputs = X
+        for layer in self.layers:
+            outputs = layer(outputs)
+        return outputs
 
     def backward(self, loss_grad):
-        pass
+        for layer in reversed(self.layers):
+            loss_grad = layer.backward(loss_grad)
+        return loss_grad
     
-    def load_model(self, param_list):
-        pass
-        
+    def load_model(self, save_path):
+        with open(save_path, 'rb') as f:
+            param_list = pickle.load(f)
+
+        i = 0
+        for layer in self.layers:
+            if layer.optimizable:
+                layer.W = param_list[i]['W']
+                layer.b = param_list[i]['b']
+                layer.params['W'] = layer.W
+                layer.params['b'] = layer.b
+                layer.weight_decay = param_list[i]['weight_decay']
+                layer.weight_decay_lambda = param_list[i]['lambda']
+                i += 1
+
     def save_model(self, save_path):
-        pass
+        param_list = []
+        for layer in self.layers:
+            if layer.optimizable:
+                param_list.append({
+                    'W': layer.W,
+                    'b': layer.b,
+                    'weight_decay': layer.weight_decay,
+                    'lambda': layer.weight_decay_lambda
+                })
+        with open(save_path, 'wb') as f:
+            pickle.dump(param_list, f)

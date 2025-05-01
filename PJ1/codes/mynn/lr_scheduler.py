@@ -7,7 +7,7 @@ class scheduler():
         self.step_count = 0
     
     @abstractmethod
-    def step():
+    def step(self):
         pass
 
 
@@ -24,7 +24,16 @@ class StepLR(scheduler):
             self.step_count = 0
 
 class MultiStepLR(scheduler):
-    pass
+    def __init__(self, optimizer, milestones, gamma=0.1):
+        self.optimizer = optimizer
+        self.milestones = set(milestones)
+        self.gamma = gamma
+        self.epoch = 0
+
+    def step(self):
+        if self.epoch in self.milestones:
+            self.optimizer.lr *= self.gamma
+        self.epoch += 1
 
 class ExponentialLR(scheduler):
     pass
