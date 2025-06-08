@@ -10,6 +10,9 @@ from tqdm import tqdm as tqdm
 from IPython import display
 
 from models.vgg import VGG_A
+# from models.vgg import VGG_A_Light
+# from models.vgg import VGG_A_Dropout
+# from models.vgg import ResNet_CIFAR10
 from models.vgg import VGG_A_BatchNorm # you need to implement this network
 from data.loaders import get_cifar_loader
 
@@ -24,43 +27,21 @@ home_path = module_path
 figures_path = os.path.join(home_path, 'reports', 'figures')
 models_path = os.path.join(home_path, 'reports', 'models')
 
-# Make sure you are using the right device.
-device_id = device_id
-os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
-device = torch.device("cuda:{}".format(3) if torch.cuda.is_available() else "cpu")
-print(device)
-print(torch.cuda.get_device_name(3))
-
-
-
-# Initialize your data loader and
-# make sure that dataloader works
-# as expected by observing one
-# sample from it.
-train_loader = get_cifar_loader(train=True)
-val_loader = get_cifar_loader(train=False)
-for X,y in train_loader:
-    ## --------------------
-    # Add code as needed
-    #
-    #
-    #
-    #
-    ## --------------------
-    break
-
-
-
 # This function is used to calculate the accuracy of model classification
-def get_accuracy():
-    ## --------------------
-    # Add code as needed
-    #
-    #
-    #
-    #
-    ## --------------------
-    pass
+def get_accuracy(model, data_loader, device):
+    model.eval()
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        for X, y in data_loader:
+            X, y = X.to(device), y.to(device)
+            outputs = model(X)
+            _, preds = outputs.max(1)
+            correct += (preds == y).sum().item()
+            total += y.size(0)
+    acc = correct / total
+    model.train()
+    return acc
 
 # Set a random seed to ensure reproducible results
 def set_random_seeds(seed_value=0, device='cpu'):
@@ -73,6 +54,45 @@ def set_random_seeds(seed_value=0, device='cpu'):
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
+def visualize_filters(model, save_path):
+    first_conv = None
+    for layer in model.modules():
+        if isinstance(layer, nn.Conv2d):
+            first_conv = layer
+            break
+    if first_conv is not None:
+        weight = first_conv.weight.data.clone().cpu()
+        n_kernels = min(weight.shape[0], 16)
+        plt.figure(figsize=(12, 6))
+        for i in range(n_kernels):
+            kernel = weight[i]
+            kernel = (kernel - kernel.min()) / (kernel.max() - kernel.min()) 
+            kernel = kernel.permute(1, 2, 0).numpy()
+            plt.subplot(2, 8, i+1)
+            plt.imshow(kernel)
+            plt.axis('off')
+        plt.suptitle("Visualization of the first layer of convolutional kernels")
+        plt.savefig(save_path)
+        plt.close()
+
+def visualize_feature_maps(model, input_tensor, save_path='reports/figures/feature_maps.png'):
+    model.eval()
+    with torch.no_grad():
+        x = input_tensor.unsqueeze(0).to(device)
+        for layer in model.features:
+            x = layer(x)
+            if isinstance(layer, nn.ReLU):  
+                break
+        fmap = x.squeeze(0).cpu()
+        num_maps = min(16, fmap.shape[0])
+        plt.figure(figsize=(12, 6))
+        for i in range(num_maps):
+            plt.subplot(2, 8, i+1)
+            plt.imshow(fmap[i], cmap='viridis')
+            plt.axis('off')
+        plt.suptitle('The first layer outputs feature maps')
+        plt.savefig(save_path)
+        plt.close()
 
 # We use this function to complete the entire
 # training process. In order to plot the loss landscape,
@@ -82,23 +102,23 @@ def set_random_seeds(seed_value=0, device='cpu'):
 # to observe the training
 def train(model, optimizer, criterion, train_loader, val_loader, scheduler=None, epochs_n=100, best_model_path=None):
     model.to(device)
-    learning_curve = [np.nan] * epochs_n
-    train_accuracy_curve = [np.nan] * epochs_n
-    val_accuracy_curve = [np.nan] * epochs_n
+    learning_curve = []
+    train_accuracy_curve = []
+    val_accuracy_curve = []
     max_val_accuracy = 0
     max_val_accuracy_epoch = 0
 
     batches_n = len(train_loader)
     losses_list = []
     grads = []
+
     for epoch in tqdm(range(epochs_n), unit='epoch'):
         if scheduler is not None:
             scheduler.step()
         model.train()
 
-        loss_list = []  # use this to record the loss value of each step
-        grad = []  # use this to record the loss gradient of each step
-        learning_curve[epoch] = 0  # maintain this to plot the training curve
+        loss_sum = 0
+        grad = []
 
         for data in train_loader:
             x, y = data
@@ -107,79 +127,156 @@ def train(model, optimizer, criterion, train_loader, val_loader, scheduler=None,
             optimizer.zero_grad()
             prediction = model(x)
             loss = criterion(prediction, y)
-            # You may need to record some variable values here
-            # if you want to get loss gradient, use
-            # grad = model.classifier[4].weight.grad.clone()
-            ## --------------------
-            # Add your code
-            #
-            #
-            #
-            #
-            ## --------------------
-
-
+            loss_sum += loss.item()
             loss.backward()
             optimizer.step()
 
-        losses_list.append(loss_list)
+        losses_list.append(loss_sum / batches_n)
         grads.append(grad)
-        display.clear_output(wait=True)
-        f, axes = plt.subplots(1, 2, figsize=(15, 3))
 
-        learning_curve[epoch] /= batches_n
-        axes[0].plot(learning_curve)
+        train_acc = get_accuracy(model, train_loader, device)
+        val_acc = get_accuracy(model, val_loader, device)
+        learning_curve.append(loss_sum / batches_n)
+        train_accuracy_curve.append(train_acc)
+        val_accuracy_curve.append(val_acc)
 
-        # Test your model and save figure here (not required)
-        # remember to use model.eval()
-        ## --------------------
-        # Add code as needed
-        #
-        #
-        #
-        #
-        ## --------------------
+        print(f"Epoch {epoch+1}/{epochs_n} - Train Loss: {loss_sum / batches_n:.4f} | Train Acc: {train_acc:.4f} | Val Acc: {val_acc:.4f}")
 
-    return
+        if val_acc > max_val_accuracy and best_model_path:
+            max_val_accuracy = val_acc
+            max_val_accuracy_epoch = epoch+1
+            torch.save(model.state_dict(), best_model_path)
+            print("Best model saved at epoch", max_val_accuracy_epoch)
 
-
-# Train your model
-# feel free to modify
-epo = 20
-loss_save_path = ''
-grad_save_path = ''
-
-set_random_seeds(seed_value=2020, device=device)
-model = VGG_A()
-lr = 0.001
-optimizer = torch.optim.Adam(model.parameters(), lr = lr)
-criterion = nn.CrossEntropyLoss()
-loss, grads = train(model, optimizer, criterion, train_loader, val_loader, epochs_n=epo)
-np.savetxt(os.path.join(loss_save_path, 'loss.txt'), loss, fmt='%s', delimiter=' ')
-np.savetxt(os.path.join(grad_save_path, 'grads.txt'), grads, fmt='%s', delimiter=' ')
-
-# Maintain two lists: max_curve and min_curve,
-# select the maximum value of loss in all models
-# on the same step, add it to max_curve, and
-# the minimum value to min_curve
-min_curve = []
-max_curve = []
-## --------------------
-# Add your code
-#
-#
-#
-#
-## --------------------
+    print("Training finished. Best val acc:", max_val_accuracy)
+    return losses_list, grads, train_accuracy_curve, val_accuracy_curve, learning_curve
 
 # Use this function to plot the final loss landscape,
 # fill the area between the two curves can use plt.fill_between()
-def plot_loss_landscape():
-    ## --------------------
-    # Add your code
-    #
-    #
-    #
-    #
-    ## --------------------
-    pass
+def plot_loss_landscape(min_curve, max_curve):
+    plt.figure(figsize=(8,4))
+    plt.fill_between(range(len(min_curve)), min_curve, max_curve, color='skyblue', alpha=0.5, label='Loss Landscape')
+    plt.plot(min_curve, label='Min Loss')
+    plt.plot(max_curve, label='Max Loss')
+    plt.xlabel('Step')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.title('Loss Landscape')
+    plt.savefig(os.path.join(figures_path, 'loss_landscape.png'))
+    plt.close()
+
+if __name__ == "__main__":
+    loss_save_path = ''
+    grad_save_path = ''
+
+    os.makedirs(figures_path, exist_ok=True)
+    os.makedirs(models_path, exist_ok=True)
+    os.makedirs(loss_save_path or '.', exist_ok=True)
+    os.makedirs(grad_save_path or '.', exist_ok=True)
+
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    print("Using device:", device)
+    if torch.cuda.is_available():
+        print(torch.cuda.get_device_name(0))
+
+    # 固定随机种子
+    set_random_seeds(seed_value=2020, device=device)
+
+    # 加载数据
+    train_loader = get_cifar_loader(train=True)
+    val_loader   = get_cifar_loader(train=False)
+
+    # 可视化一张训练样本
+    for X, y in train_loader:
+        img = X[0].cpu().numpy().transpose(1, 2, 0)
+        plt.imshow(img * 0.5 + 0.5)
+        plt.title(f"Label: {y[0].item()}")
+        plt.savefig(os.path.join(figures_path, 'sample_batch.png'))
+        print("Saved a sample figure.")
+        break
+
+    # 训练配置
+    epo = 10
+    criterion = nn.CrossEntropyLoss()
+    learning_rates = [1e-3, 5e-4]
+
+    # 收集不同 lr 下的 VGG_A loss 曲线 
+    all_curves_vgg = []
+    for lr in learning_rates:
+        set_random_seeds(seed_value=2020, device=device)
+        model = VGG_A().to(device)
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
+        print(f"\nTraining VGG_A with lr={lr}")
+        _, _, _, _, curve = train(
+            model, optimizer, criterion,
+            train_loader, val_loader,
+            epochs_n=epo, best_model_path=None
+        )
+        all_curves_vgg.append(curve)
+
+    # 收集不同 lr 下的 VGG_A + BatchNorm loss
+    all_curves_bn = []
+    for lr in learning_rates:
+        set_random_seeds(seed_value=2020, device=device)
+        model = VGG_A_BatchNorm().to(device)
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
+        print(f"\nTraining VGG_A_BatchNorm with lr={lr}")
+        _, _, _, _, curve = train(
+            model, optimizer, criterion,
+            train_loader, val_loader,
+            epochs_n=epo, best_model_path=None
+        )
+        all_curves_bn.append(curve)
+
+    # —— 计算 min_curve 和 max_curve —— 
+    all_vgg = np.stack(all_curves_vgg)   # shape: (len(lr), epo)
+    min_curve_vgg = all_vgg.min(axis=0)
+    max_curve_vgg = all_vgg.max(axis=0)
+
+    all_bn = np.stack(all_curves_bn)
+    min_curve_bn = all_bn.min(axis=0)
+    max_curve_bn = all_bn.max(axis=0)
+
+    steps = np.arange(1, epo+1)
+ 
+    plt.figure(figsize=(8, 4))
+    plt.fill_between(steps, min_curve_vgg, max_curve_vgg,
+                     color='green', alpha=0.3, label='VGG_A loss range')
+
+    plt.fill_between(steps, min_curve_bn, max_curve_bn,
+                     color='red', alpha=0.3, label='VGG_A + BN loss range')
+    plt.plot(steps, min_curve_vgg, '--', color='green', linewidth=1)
+    plt.plot(steps, max_curve_vgg, '--', color='green', linewidth=1)
+    plt.plot(steps, min_curve_bn,  '--', color='red',   linewidth=1)
+    plt.plot(steps, max_curve_bn,  '--', color='red',   linewidth=1)
+
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title('Loss Landscape Range Across Learning Rates')
+    plt.legend()
+    plt.savefig(os.path.join(figures_path, 'loss_landscape_comparison.png'))
+    plt.close()
+    print("Saved loss_landscape_comparison.png")
+
+    curve_vgg0 = all_curves_vgg[0]
+    curve_bn0  = all_curves_bn[0]
+
+    plt.figure(figsize=(12, 5))
+    plt.subplot(1, 2, 1)
+    plt.plot(steps, curve_vgg0, label=f'VGG_A (lr={learning_rates[0]})')
+    plt.plot(steps, curve_bn0,  label=f'VGG_A+BN (lr={learning_rates[0]})')
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.legend()
+
+    plt.suptitle("Sample Loss Curves (first lr)")
+    plt.savefig(os.path.join(figures_path, 'sample_acc_loss_curve.png'))
+    plt.close()
+    print("Saved sample_acc_loss_curve.png")
+
+    # —— 其它可视化保持不变 —— 
+    visualize_filters(VGG_A().to(device), os.path.join(figures_path, 'conv1_kernels.png'))
+    for X_val, _ in val_loader:
+        visualize_feature_maps(VGG_A().to(device), X_val[0], os.path.join(figures_path, 'feature_maps.png'))
+        break
+

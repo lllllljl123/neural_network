@@ -1,10 +1,11 @@
 """
 VGG
 """
+import os,sys
 import numpy as np
 from torch import nn
-
-from codes_for_pj.utils.nn import init_weights_
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.nn import init_weights_
 
 # ## Models implementation
 def get_number_of_parameters(model):
@@ -81,15 +82,18 @@ class VGG_A_Light(nn.Module):
     def __init__(self, inp_ch=3, num_classes=10):
         super().__init__()
 
-        self.stage1 = nn.Sequential(
+        self.features = nn.Sequential(
+            # Stage 1
             nn.Conv2d(in_channels=inp_ch, out_channels=16, kernel_size=3, padding=1),
             nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2))
+            nn.MaxPool2d(kernel_size=2, stride=2),
 
-        self.stage2 = nn.Sequential(
+            # Stage 2
             nn.Conv2d(in_channels=16, out_channels=32, kernel_size=3, padding=1),
             nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2))
+            nn.MaxPool2d(kernel_size=2, stride=2)
+        )
+            
         '''
         self.stage3 = nn.Sequential(
             nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, padding=1),
@@ -117,49 +121,46 @@ class VGG_A_Light(nn.Module):
             nn.Linear(128, num_classes))
 
     def forward(self, x):
-        x = self.stage1(x)
-        x = self.stage2(x)
-        # x = self.stage3(x)
-        # x = self.stage4(x)
-        # x = self.stage5(x)
+        x = self.features(x)
         x = self.classifier(x.view(-1, 32 * 8 * 8))
         return x
-
 
 class VGG_A_Dropout(nn.Module):
     def __init__(self, inp_ch=3, num_classes=10):
         super().__init__()
 
-        self.stage1 = nn.Sequential(
+        self.features = nn.Sequential(
+            # Stage 1
             nn.Conv2d(in_channels=inp_ch, out_channels=64, kernel_size=3, padding=1),
             nn.ReLU(True),
-            nn.MaxPool2d(kernel_size=2, stride=2))
+            nn.MaxPool2d(kernel_size=2, stride=2),
 
-        self.stage2 = nn.Sequential(
+            # Stage 2
             nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3, padding=1),
             nn.ReLU(True),
-            nn.MaxPool2d(kernel_size=2, stride=2))
+            nn.MaxPool2d(kernel_size=2, stride=2),
 
-        self.stage3 = nn.Sequential(
+            # Stage 3
             nn.Conv2d(in_channels=128, out_channels=256, kernel_size=3, padding=1),
             nn.ReLU(True),
             nn.Conv2d(in_channels=256, out_channels=256, kernel_size=3, padding=1),
             nn.ReLU(True),
-            nn.MaxPool2d(kernel_size=2, stride=2))
+            nn.MaxPool2d(kernel_size=2, stride=2),
 
-        self.stage4 = nn.Sequential(
+            # Stage 4
             nn.Conv2d(in_channels=256, out_channels=512, kernel_size=3, padding=1),
             nn.ReLU(True),
             nn.Conv2d(in_channels=512, out_channels=512, kernel_size=3, padding=1),
             nn.ReLU(True),
-            nn.MaxPool2d(kernel_size=2, stride=2))
+            nn.MaxPool2d(kernel_size=2, stride=2),
 
-        self.stage5 = nn.Sequential(
+            # Stage 5
             nn.Conv2d(in_channels=512, out_channels=512, kernel_size=3, padding=1),
             nn.ReLU(True),
             nn.Conv2d(in_channels=512, out_channels=512, kernel_size=3, padding=1),
             nn.ReLU(True),
-            nn.MaxPool2d(kernel_size=2, stride=2))
+            nn.MaxPool2d(kernel_size=2, stride=2)
+        )
 
         self.classifier = nn.Sequential(
             nn.Dropout(),
@@ -171,16 +172,149 @@ class VGG_A_Dropout(nn.Module):
             nn.Linear(512, num_classes))
 
     def forward(self, x):
-        x = self.stage1(x)
-        x = self.stage2(x)
-        x = self.stage3(x)
-        x = self.stage4(x)
-        x = self.stage5(x)
+        x = self.features(x)
         x = self.classifier(x.view(-1, 512 * 1 * 1))
         return x
+
+class ResidualBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, stride=1):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.gelu = nn.GELU()
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+
+        self.downsample = nn.Sequential()
+        if stride != 1 or in_channels != out_channels:
+            self.downsample = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(out_channels))
+
+    def forward(self, x):
+        identity = self.downsample(x)
+        out = self.gelu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        out += identity
+        return self.gelu(out)
+
+class ResNet_CIFAR10(nn.Module):
+    def __init__(self, inp_ch=3, num_classes=10, init_weights=True):
+        super().__init__()
+        self.features = nn.Sequential(
+            nn.Conv2d(inp_ch, 64, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm2d(64),
+            nn.GELU(),
+            
+            # Stage 1
+            ResidualBlock(64, 64, stride=1),
+            ResidualBlock(64, 64, stride=1),
+
+            # Stage 2
+            ResidualBlock(64, 128, stride=2),
+            ResidualBlock(128, 128, stride=1),
+
+            # Stage 3
+            ResidualBlock(128, 256, stride=2),
+            ResidualBlock(256, 256, stride=1),
+
+            # Stage 4
+            ResidualBlock(256, 512, stride=2),
+            ResidualBlock(512, 512, stride=1),
+
+            nn.AdaptiveAvgPool2d((1, 1))
+        )
+
+        self.classifier = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(512, num_classes)
+        )
+
+        if init_weights:
+            self._init_weights()
+
+    def forward(self, x):
+        x = self.features(x)
+        x = self.classifier(x)
+        return x
+
+    def _init_weights(self):
+        for m in self.modules():
+            init_weights_(m)
+
+class VGG_A_BatchNorm(nn.Module):
+    """VGG-A with Batch Normalization"""
+    def __init__(self, inp_ch=3, num_classes=10, init_weights=True):
+        super().__init__()
+
+        self.features = nn.Sequential(
+            # Stage 1
+            nn.Conv2d(inp_ch, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(True),
+            nn.MaxPool2d(2, 2),
+
+            # Stage 2
+            nn.Conv2d(64, 128, kernel_size=3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(True),
+            nn.MaxPool2d(2, 2),
+
+            # Stage 3
+            nn.Conv2d(128, 256, kernel_size=3, padding=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU(True),
+            nn.Conv2d(256, 256, kernel_size=3, padding=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU(True),
+            nn.MaxPool2d(2, 2),
+
+            # Stage 4
+            nn.Conv2d(256, 512, kernel_size=3, padding=1),
+            nn.BatchNorm2d(512),
+            nn.ReLU(True),
+            nn.Conv2d(512, 512, kernel_size=3, padding=1),
+            nn.BatchNorm2d(512),
+            nn.ReLU(True),
+            nn.MaxPool2d(2, 2),
+
+            # Stage 5
+            nn.Conv2d(512, 512, kernel_size=3, padding=1),
+            nn.BatchNorm2d(512),
+            nn.ReLU(True),
+            nn.Conv2d(512, 512, kernel_size=3, padding=1),
+            nn.BatchNorm2d(512),
+            nn.ReLU(True),
+            nn.MaxPool2d(2, 2),
+        )
+
+        self.classifier = nn.Sequential(
+            nn.Linear(512 * 1 * 1, 512),
+            nn.BatchNorm1d(512),
+            nn.ReLU(True),
+            nn.Linear(512, 512),
+            nn.BatchNorm1d(512),
+            nn.ReLU(True),
+            nn.Linear(512, num_classes)
+        )
+
+        if init_weights:
+            self._init_weights()
+
+    def forward(self, x):
+        x = self.features(x)
+        x = x.view(-1, 512 * 1 * 1)
+        x = self.classifier(x)
+        return x
+
+    def _init_weights(self):
+        for m in self.modules():
+            init_weights_(m)
+
 
 
 if __name__ == '__main__':
     print(get_number_of_parameters(VGG_A()))
     print(get_number_of_parameters(VGG_A_Light()))
     print(get_number_of_parameters(VGG_A_Dropout()))
+    print(get_number_of_parameters(ResNet_CIFAR10()))
